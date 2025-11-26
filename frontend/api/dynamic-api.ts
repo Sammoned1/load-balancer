@@ -33,17 +33,17 @@ export type DynamicResponse = ServerSideDynamicResponse | ClientSideDynamicRespo
 
 const dynamicApi = (apiClient: AxiosInstance) => ({
   bubbleSort: async (): Promise<DynamicResponse> => {
-    const response = await apiClient.post<DynamicResponse>('/dynamic/bubble-sort');
+    const response = await apiClient.get<DynamicResponse>('/dynamic/bubble-sort');
     return response.data;
   },
 
   fibonacci: async (): Promise<DynamicResponse> => {
-    const response = await apiClient.post<DynamicResponse>('/dynamic/fibonacci');
+    const response = await apiClient.get<DynamicResponse>('/dynamic/fibonacci');
     return response.data;
   },
 
   permutations: async (): Promise<DynamicResponse> => {
-    const response = await apiClient.post<DynamicResponse>('/dynamic/permutations');
+    const response = await apiClient.get<DynamicResponse>('/dynamic/permutations');
     return response.data;
   },
 });

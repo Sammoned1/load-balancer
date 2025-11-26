@@ -43,7 +43,7 @@ const serverSideApi = (apiClient: AxiosInstance) => ({
    * Вызов пузырьковой сортировки на сервере
    */
   bubbleSort: async (): Promise<BubbleSortResponse> => {
-    const response = await apiClient.post<BubbleSortResponse>('/server-side/bubble-sort');
+    const response = await apiClient.get<BubbleSortResponse>('/server-side/bubble-sort');
     return response.data;
   },
 
@@ -51,7 +51,7 @@ const serverSideApi = (apiClient: AxiosInstance) => ({
    * Вызов вычисления чисел Фибоначчи на сервере
    */
   fibonacci: async (): Promise<FibonacciResponse> => {
-    const response = await apiClient.post<FibonacciResponse>('/server-side/fibonacci');
+    const response = await apiClient.get<FibonacciResponse>('/server-side/fibonacci');
     return response.data;
   },
 
@@ -59,7 +59,7 @@ const serverSideApi = (apiClient: AxiosInstance) => ({
    * Вызов генерации перестановок на сервере
    */
   permutations: async (): Promise<PermutationsResponse> => {
-    const response = await apiClient.post<PermutationsResponse>('/server-side/permutations');
+    const response = await apiClient.get<PermutationsResponse>('/server-side/permutations');
     return response.data;
   },
 

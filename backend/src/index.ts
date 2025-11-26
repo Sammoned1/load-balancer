@@ -20,7 +20,7 @@ app.use(cors({
 }));
 
 // Логирование
-const logger = winston.createLogger({
+export const logger = winston.createLogger({
   level: "info",
   transports: [new winston.transports.Console()],
   format: winston.format.combine(
@@ -30,12 +30,12 @@ const logger = winston.createLogger({
 });
 
 // Лимитирование запросов
-const limiter = rateLimit({
-  windowMs: 10 * 1000, // 10 секунд
-  max: 50, // не более 50 запросов за 10 секунд
-});
+// const limiter = rateLimit({
+//   windowMs: 10 * 1000, // 10 секунд
+//   max: 50, // не более 50 запросов за 10 секунд
+// });
 
-app.use(limiter);
+// app.use(limiter);
 app.use(express.json());
 
 // // Метрики Prometheus

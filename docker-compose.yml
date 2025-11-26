@@ -26,16 +26,25 @@ services:
       - "8080:8080"
     environment:
       - NODE_ENV=development
-      - DATABASE_URL=postgresql://app:app@lb_postgres:5432/load_test
       - PORT=8080
-    depends_on:
-      - postgres
+      - API_BASE_URL=http://localhost:8080/api
     networks:
       - lb_network
     volumes:
       - ./backend:/usr/src/app
       - /usr/src/app/node_modules
     command: npm run dev
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   frontend:
     build:
@@ -81,13 +90,13 @@ services:
       - grafana_data:/var/lib/grafana
 
   k6:
-    image: grafana/k6
+    image: grafana/k6:0.47.0
     container_name: lb_k6
-    tty: true
     networks:
       - lb_network
     volumes:
       - ./load-tester:/scripts
+    working_dir: /scripts
 
 volumes:
   db_data:

@@ -10,6 +10,7 @@ import {
   PERMUTATIONS_INPUT,
   PERFORMANCE_TEST_DATA 
 } from '../consts';
+import { logger } from '..';
 
 export class ServerSideController {
   /**
@@ -24,19 +25,20 @@ export class ServerSideController {
       
       const endTime = process.hrtime(startTime);
       const executionTimeMs = (endTime[0] * 1000 + endTime[1] / 1000000).toFixed(2);
+      logger.info(`Bubble-sort. Execution time: ${executionTimeMs} ms`)
       
       res.json({
         success: true,
         algorithm: 'bubble-sort',
-        input: inputArray,
-        result: result,
+        // input: inputArray,
+        // result: result,
         inputLength: inputArray.length,
         executionTime: `${executionTimeMs} ms`,
         performance: 'measured'
       });
       
     } catch (error) {
-      console.error('Error in handleBubbleSort:', error);
+      logger.error('Error in handleBubbleSort:', error);
       res.status(500).json({
         success: false,
         error: 'Internal server error during bubble sort'
@@ -56,18 +58,19 @@ export class ServerSideController {
       
       const endTime = process.hrtime(startTime);
       const executionTimeMs = (endTime[0] * 1000 + endTime[1] / 1000000).toFixed(2);
+      logger.info(`Fibonacci. Execution time: ${executionTimeMs} ms`)
       
       res.json({
         success: true,
         algorithm: 'fibonacci',
-        input: n,
-        result: result,
+        // input: n,
+        // result: result,
         executionTime: `${executionTimeMs} ms`,
         performance: 'measured'
       });
       
     } catch (error) {
-      console.error('Error in handleFibonacci:', error);
+      logger.error('Error in handleFibonacci:', error);
       res.status(500).json({
         success: false,
         error: 'Internal server error during fibonacci calculation'
@@ -83,24 +86,24 @@ export class ServerSideController {
       const startTime = process.hrtime();
       
       const n = PERMUTATIONS_INPUT;
-      const inputData = Array.from({ length: PERMUTATIONS_INPUT }, (_, i) => i + 1);
       const result = generateNumberPermutations(n);
       
       const endTime = process.hrtime(startTime);
       const executionTimeMs = (endTime[0] * 1000 + endTime[1] / 1000000).toFixed(2);
+      logger.info(`Permutations. Execution time: ${executionTimeMs} ms`)
       
       res.json({
         success: true,
         algorithm: 'permutations',
-        input: n,
+        // input: n,
         resultCount: result.length,
-        sample: result.slice(0, 5),
+        // sample: result.slice(0, 5),
         executionTime: `${executionTimeMs} ms`,
         performance: 'measured'
       });
       
     } catch (error) {
-      console.error('Error in handlePermutations:', error);
+      logger.error('Error in handlePermutations:', error);
       res.status(500).json({
         success: false,
         error: 'Internal server error during permutations generation'
@@ -152,6 +155,7 @@ export class ServerSideController {
       
       const endTime = process.hrtime(startTime);
       const executionTimeMs = (endTime[0] * 1000 + endTime[1] / 1000000).toFixed(2);
+      logger.info(`Performance test. Execution time: ${executionTimeMs} ms`)
       
       res.json({
         success: true,
@@ -161,7 +165,7 @@ export class ServerSideController {
       });
       
     } catch (error) {
-      console.error('Error in handlePerformanceTest:', error);
+      logger.error('Error in handlePerformanceTest:', error);
       res.status(500).json({
         success: false,
         error: 'Internal server error during performance test'

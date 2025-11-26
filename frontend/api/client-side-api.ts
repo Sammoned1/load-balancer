@@ -10,17 +10,17 @@ export interface ClientSideResponse {
 
 const clientSideApi = (apiClient: AxiosInstance) => ({
   bubbleSort: async (): Promise<ClientSideResponse> => {
-    const response = await apiClient.post<ClientSideResponse>('/client-side/bubble-sort');
+    const response = await apiClient.get<ClientSideResponse>('/client-side/bubble-sort');
     return response.data;
   },
 
   fibonacci: async (): Promise<ClientSideResponse> => {
-    const response = await apiClient.post<ClientSideResponse>('/client-side/fibonacci');
+    const response = await apiClient.get<ClientSideResponse>('/client-side/fibonacci');
     return response.data;
   },
 
   permutations: async (): Promise<ClientSideResponse> => {
-    const response = await apiClient.post<ClientSideResponse>('/client-side/permutations');
+    const response = await apiClient.get<ClientSideResponse>('/client-side/permutations');
     return response.data;
   },
 });
