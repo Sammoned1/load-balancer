@@ -15,6 +15,22 @@ healthRouter.get('/health', (req, res) => {
   });
 });
 
+healthRouter.get('/stats', (req, res) => {
+  const stats = loadBalancer.getStats();
+  res.json({
+    success: true,
+    data: stats
+  });
+});
+
+healthRouter.post('/reset-stats', (req, res) => {
+  loadBalancer.resetStats();
+  res.json({
+    success: true,
+    message: 'Statistics reset'
+  });
+});
+
 healthRouter.get('/metrics', async (req, res) => {
   try {
     // Эндпоинт для сбора метрик Prometheus

@@ -1,31 +1,148 @@
 import os from 'os';
 import process from 'process';
+import { logger } from '.';
+import fs from 'fs/promises';
 
 export interface ContainerMetrics {
-  cpuUsage: number;          // % использования CPU
-  cpuLimit: number;          // абсолютный лимит CPU (ядра)
+  cpuUsage: number;          // % использования CPU от лимита контейнера
   memoryUsage: number;       // % использования памяти
-  memoryLimit: number;       // абсолютный лимит памяти в байтах
-  eventLoopDelay: number;    // задержка event loop в ms
   activeRequests: number;    // количество активных запросов
+}
+
+interface LoadBalancerStats {
+  totalRequests: number;
+  serverOperations: number;
+  clientOperations: number;
+  serverPercentage: number;
+  clientPercentage: number;
+  rejectionReasons: {
+    cpu: number;
+    memory: number;
+    activeRequests: number;
+    circuitBreaker: number;
+  };
 }
 
 export class ContainerLoadBalancer {
   private activeRequests: number = 0;
-  private readonly thresholds = {
-    cpu: 0.70,              // 70% от лимита контейнера
-    memory: 0.75,           // 75% от лимита памяти
-    eventLoopDelay: 30,     // 30ms задержка
-    activeRequests: 15      // 15 одновременных запросов
+  private lastCpuMeasurement: { time: number; usage: number } | null = null;
+  
+  // Статистика
+  private totalRequests: number = 0;
+  private serverOperations: number = 0;
+  private clientOperations: number = 0;
+  private rejectionReasons = {
+    cpu: 0,
+    memory: 0,
+    activeRequests: 0,
+    circuitBreaker: 0
   };
+
+  // Пороги
+  private readonly thresholds = {
+    cpu: 0.25,
+    memory: 0.45,
+    activeRequests: 4
+  };
+
+  // Лимиты контейнера (0.1 CPU, 128MB)
+  private containerCpuLimit: number = os.cpus().length; // по умолчанию
+  private containerMemoryLimit: number = os.totalmem(); // по умолчанию
 
   private circuitBreakerState: 'CLOSED' | 'OPEN' | 'HALF_OPEN' = 'CLOSED';
   private circuitBreakerLastFailure: number = 0;
-  private readonly circuitBreakerThreshold = 5; // 5 ошибок подряд
-  private readonly circuitBreakerTimeout = 30000; // 30 секунд
+  private readonly circuitBreakerThreshold = 5;
+  private readonly circuitBreakerTimeout = 30000;
+
+  constructor() {
+    // Инициализируем первое измерение CPU
+    this.loadContainerLimits();
+    this.startStatsLogging();
+  }
+
+  private startStatsLogging(): void {
+    setInterval(() => {
+      this.logStats();
+    }, 30000);
+  }
+
+  private async loadContainerLimits(): Promise<void> {
+    try {
+      let cpuLimit = os.cpus().length;
+      let memoryLimit = os.totalmem();
+
+      // CPU limits для cgroups v2
+      try {
+        const cpuMax = await fs.readFile('/sys/fs/cgroup/cpu.max', 'utf8');
+        const [quotaStr, periodStr] = cpuMax.trim().split(' ');
+        const period = parseInt(periodStr);
+        
+        if (quotaStr !== 'max' && period > 0) {
+          const quota = parseInt(quotaStr);
+          if (quota > 0) {
+            cpuLimit = quota / period;
+          }
+        }
+      } catch (error) {
+        // Пробуем cgroups v1 как fallback
+        try {
+          const cpuQuota = await fs.readFile('/sys/fs/cgroup/cpu/cpu.cfs_quota_us', 'utf8');
+          const cpuPeriod = await fs.readFile('/sys/fs/cgroup/cpu/cpu.cfs_period_us', 'utf8');
+          
+          const quota = parseInt(cpuQuota.trim());
+          const period = parseInt(cpuPeriod.trim());
+          
+          if (quota > 0 && period > 0) {
+            cpuLimit = quota / period;
+          }
+        } catch (error) {
+          console.log('⚠️ Using default CPU limit');
+        }
+      }
+
+      // Memory limits для cgroups v2
+      try {
+        const memoryMax = await fs.readFile('/sys/fs/cgroup/memory.max', 'utf8');
+        const maxStr = memoryMax.trim();
+        
+        if (maxStr !== 'max') {
+          const max = parseInt(maxStr);
+          if (max > 0 && max < Number.MAX_SAFE_INTEGER) {
+            memoryLimit = max;
+          }
+        }
+      } catch (error) {
+        // Пробуем cgroups v1 как fallback
+        try {
+          const memoryLimitFile = await fs.readFile('/sys/fs/cgroup/memory/memory.limit_in_bytes', 'utf8');
+          const limit = parseInt(memoryLimitFile.trim());
+          
+          if (limit > 0 && limit < Number.MAX_SAFE_INTEGER) {
+            memoryLimit = limit;
+          }
+        } catch (error) {
+          console.log('⚠️ Using default memory limit');
+        }
+      }
+
+      this.containerCpuLimit = cpuLimit;
+      this.containerMemoryLimit = memoryLimit;
+      
+      console.log('📦 Container limits loaded:', {
+        cpu: this.containerCpuLimit,
+        memory: `${Math.round(this.containerMemoryLimit / 1024 / 1024)}MB`
+      });
+      
+    } catch (error) {
+      console.log('⚠️ Using default limits (not in container or cannot read cgroups)');
+      this.containerCpuLimit = os.cpus().length;
+      this.containerMemoryLimit = os.totalmem();
+    }
+  }
 
   public startRequest(): void {
     this.activeRequests++;
+    this.totalRequests++;
   }
 
   public completeRequest(): void {
@@ -33,109 +150,140 @@ export class ContainerLoadBalancer {
   }
 
   public async canHandleOnServer(): Promise<boolean> {
-    // 1. Проверяем circuit breaker
     if (this.isCircuitOpen()) {
+      console.log('🔴 Circuit breaker OPEN - forcing client-side');
+      this.clientOperations++;
+      this.rejectionReasons.circuitBreaker++;
       return false;
     }
 
     try {
-      // 2. Получаем метрики контейнера и приложения
-      const [containerMetrics, appMetrics] = await Promise.all([
-        this.getContainerMetrics(),
-        this.getAppMetrics()
-      ]);
+      const containerMetrics = await this.getContainerMetrics();
 
-      // 3. Проверяем здоровье системы
-      const isHealthy = this.isSystemHealthy(containerMetrics, appMetrics);
+      // Логируем метрики для диагностики
+      console.log('📊 Load Balancer Metrics:', {
+        cpu: `${(containerMetrics.cpuUsage * 100).toFixed(1)}%`,
+        memory: `${(containerMetrics.memoryUsage * 100).toFixed(1)}%`,
+        activeRequests: containerMetrics.activeRequests,
+        thresholds: this.thresholds
+      });
 
-      // 4. Обновляем circuit breaker
+      const healthCheck = this.isSystemHealthy(containerMetrics);
+      const isHealthy = healthCheck.healthy;
+      
+      if (isHealthy) {
+        this.serverOperations++;
+        logger.info(`✅ Processing on SERVER - ${healthCheck.reason}`);
+      } else {
+        this.clientOperations++;
+        this.rejectionReasons[healthCheck.reason as keyof typeof this.rejectionReasons]++;
+        logger.info(`🔄 Redirecting to CLIENT - ${healthCheck.details}`);
+      }
+      
       this.updateCircuitBreaker(isHealthy);
-
       return isHealthy;
+
     } catch (error) {
-      // В случае ошибки при сборе метрик - открываем circuit breaker
+      logger.error('❌ Error in load balancer:', error);
       this.recordCircuitBreakerFailure();
+      this.clientOperations++;
+      this.rejectionReasons.circuitBreaker++;
       return false;
     }
   }
 
   private async getContainerMetrics(): Promise<ContainerMetrics> {
-    // Базовые метрики системы
-    const cpuUsage = await this.getCpuUsage();
-    const memoryUsage = process.memoryUsage();
+    const memoryUsage = process.memoryUsage().heapUsed / this.containerMemoryLimit;
     
-    // Получаем лимиты контейнера (будут использоваться реальные лимиты Docker)
-    const containerLimits = this.getContainerLimits();
+    // Измеряем CPU usage для этого конкретного запроса
+    const cpuUsage = await this.measureCurrentCpuUsage();
 
     return {
       cpuUsage,
-      memoryUsage: memoryUsage.heapUsed / containerLimits.memoryLimit,
-      memoryLimit: containerLimits.memoryLimit,
-      cpuLimit: containerLimits.cpuLimit,
-      eventLoopDelay: await this.getEventLoopDelay(),
+      memoryUsage,
       activeRequests: this.activeRequests
     };
   }
 
-  private async getCpuUsage(): Promise<number> {
+  private async measureCurrentCpuUsage(): Promise<number> {
     return new Promise((resolve) => {
+      const startTime = Date.now();
       const startUsage = process.cpuUsage();
-      const startTime = process.hrtime();
-
+      
+      // Ждем 100ms для измерения CPU usage
       setTimeout(() => {
-        const endUsage = process.cpuUsage(startUsage);
-        const endTime = process.hrtime(startTime);
+        const endTime = Date.now();
+        const endUsage = process.cpuUsage();
         
-        const elapsedTime = (endTime[0] * 1e9 + endTime[1]) / 1e6; // ms
-        const elapsedUsage = (endUsage.user + endUsage.system) / 1000; // microseconds to ms
+        const timeDiff = endTime - startTime; // в миллисекундах
+        const usageDiff = (endUsage.user - startUsage.user) + (endUsage.system - startUsage.system); // в микросекундах
         
-        // CPU usage in percentage
-        const cpuPercent = (elapsedUsage / elapsedTime) * 100;
-        resolve(cpuPercent);
-      }, 100);
+        // Максимально возможное использование за timeDiff для контейнера:
+        // timeDiff (ms) * 1000 (microseconds/ms) * containerCpuLimit (cores)
+        const maxUsage = timeDiff * 1000 * this.containerCpuLimit;
+        
+        let cpuUsage = 0;
+        if (maxUsage > 0) {
+          cpuUsage = usageDiff / maxUsage;
+        }
+        
+        // Ограничиваем 100%
+        resolve(Math.min(cpuUsage, 1));
+      }, 100); // Измеряем за 100ms
     });
   }
 
-  private async getEventLoopDelay(): Promise<number> {
-    return new Promise((resolve) => {
-      const start = process.hrtime();
-      setImmediate(() => {
-        const end = process.hrtime(start);
-        const delay = (end[0] * 1000) + (end[1] / 1000000); // convert to ms
-        resolve(delay);
-      });
+  private isSystemHealthy(container: ContainerMetrics): { 
+    healthy: boolean; 
+    reason: string;
+    details: string;
+  } {
+    const metrics = {
+      cpu: container.cpuUsage,
+      memory: container.memoryUsage,
+      activeRequests: container.activeRequests
+    };
+
+    console.log('🔍 Health Check - Current vs Thresholds:', {
+      cpu: `${(metrics.cpu * 100).toFixed(1)}% vs ${(this.thresholds.cpu * 100).toFixed(1)}%`,
+      memory: `${(metrics.memory * 100).toFixed(1)}% vs ${(this.thresholds.memory * 100).toFixed(1)}%`,
+      activeRequests: `${metrics.activeRequests} vs ${this.thresholds.activeRequests}`
     });
-  }
 
-  private getContainerLimits(): { memoryLimit: number; cpuLimit: number } {
-    // В контейнере Docker мы можем получить реальные лимиты
-    // По умолчанию используем системные значения, но в Docker они будут переопределены
+    // Проверяем каждый порог отдельно
+    if (metrics.cpu >= this.thresholds.cpu) {
+      return {
+        healthy: false,
+        reason: 'cpu',
+        details: `CPU usage ${(metrics.cpu * 100).toFixed(1)}% exceeds threshold ${(this.thresholds.cpu * 100).toFixed(1)}%`
+      };
+    }
+
+    if (metrics.memory >= this.thresholds.memory) {
+      return {
+        healthy: false,
+        reason: 'memory',
+        details: `Memory usage ${(metrics.memory * 100).toFixed(1)}% exceeds threshold ${(this.thresholds.memory * 100).toFixed(1)}%`
+      };
+    }
+
+    if (metrics.activeRequests >= this.thresholds.activeRequests) {
+      return {
+        healthy: false,
+        reason: 'activeRequests',
+        details: `Active requests ${metrics.activeRequests} exceeds threshold ${this.thresholds.activeRequests}`
+      };
+    }
+
     return {
-      memoryLimit: os.totalmem(), // Будет ограничено Docker --memory
-      cpuLimit: os.cpus().length  // Будет ограничено Docker --cpus
+      healthy: true,
+      reason: 'healthy',
+      details: 'All metrics within acceptable thresholds'
     };
-  }
-
-  private getAppMetrics() {
-    return {
-      responseTime: 0, // Можно добавить отслеживание времени ответа
-      errorRate: 0     // Можно добавить отслеживание ошибок
-    };
-  }
-
-  private isSystemHealthy(
-    container: ContainerMetrics,
-    app: any
-  ): boolean {
-    return container.cpuUsage < this.thresholds.cpu &&
-           container.memoryUsage < this.thresholds.memory &&
-           container.eventLoopDelay < this.thresholds.eventLoopDelay &&
-           container.activeRequests < this.thresholds.activeRequests;
   }
 
   private isCircuitOpen(): boolean {
     if (this.circuitBreakerState === 'OPEN') {
-      // Проверяем, не истек ли таймаут
       if (Date.now() - this.circuitBreakerLastFailure > this.circuitBreakerTimeout) {
         this.circuitBreakerState = 'HALF_OPEN';
         return false;
@@ -156,8 +304,62 @@ export class ContainerLoadBalancer {
 
   private recordCircuitBreakerFailure(): void {
     this.circuitBreakerLastFailure = Date.now();
-    // Здесь можно добавить логику для подсчета последовательных ошибок
-    // и открытия circuit breaker при достижении порога
+  }
+
+  public getStats(): LoadBalancerStats {
+    const totalProcessed = this.serverOperations + this.clientOperations;
+    const serverPercentage = totalProcessed > 0 ? (this.serverOperations / totalProcessed) * 100 : 0;
+    const clientPercentage = totalProcessed > 0 ? (this.clientOperations / totalProcessed) * 100 : 0;
+
+    return {
+      totalRequests: this.totalRequests,
+      serverOperations: this.serverOperations,
+      clientOperations: this.clientOperations,
+      serverPercentage: Math.round(serverPercentage * 100) / 100,
+      clientPercentage: Math.round(clientPercentage * 100) / 100,
+      rejectionReasons: { ...this.rejectionReasons }
+    };
+  }
+
+  public logStats(): void {
+    const stats = this.getStats();
+    
+    console.log('\n📈 ===== LOAD BALANCER STATISTICS =====');
+    console.log(`📊 Total Requests: ${stats.totalRequests}`);
+    console.log(`🟢 Server Operations: ${stats.serverOperations} (${stats.serverPercentage}%)`);
+    console.log(`🟡 Client Operations: ${stats.clientOperations} (${stats.clientPercentage}%)`);
+    console.log('🔍 Rejection Reasons:');
+    console.log(`   • CPU: ${stats.rejectionReasons.cpu}`);
+    console.log(`   • Memory: ${stats.rejectionReasons.memory}`);
+    console.log(`   • Active Requests: ${stats.rejectionReasons.activeRequests}`);
+    console.log(`   • Circuit Breaker: ${stats.rejectionReasons.circuitBreaker}`);
+    console.log('=====================================\n');
+  }
+
+  public updateThresholds(newThresholds: Partial<typeof this.thresholds>): void {
+    Object.assign(this.thresholds, newThresholds);
+    console.log('🔄 Thresholds updated:', this.thresholds);
+  }
+
+  public async getCurrentMetrics(): Promise<ContainerMetrics> {
+    return this.getContainerMetrics();
+  }
+
+  public getCurrentThresholds(): typeof this.thresholds {
+    return { ...this.thresholds };
+  }
+
+  public resetStats(): void {
+    this.totalRequests = 0;
+    this.serverOperations = 0;
+    this.clientOperations = 0;
+    this.rejectionReasons = {
+      cpu: 0,
+      memory: 0,
+      activeRequests: 0,
+      circuitBreaker: 0
+    };
+    console.log('🔄 Statistics reset');
   }
 }
 
