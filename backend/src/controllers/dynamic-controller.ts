@@ -36,7 +36,7 @@ export class DynamicController {
           success: true,
           algorithm: 'bubble-sort',
           executedOn: 'server',
-          executionTime: `${executionTimeMs} ms`,
+          executionTime: executionTimeMs,
           // result: result,
           inputLength: BUBBLE_SORT_INPUT.length,
           // loadInfo: await this.getLoadInfo()

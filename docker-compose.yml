@@ -30,12 +30,51 @@ services:
       timeout: 10s
       retries: 3
 
+  # InfluxDB для хранения метрик
+  influxdb:
+    image: influxdb:2.7
+    container_name: influxdb
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=admin123
+      - DOCKER_INFLUXDB_INIT_ORG=myorg
+      - DOCKER_INFLUXDB_INIT_BUCKET=mybucket
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-secret-auth-token
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    networks:
+      - lb_network
+
+  # Grafana для визуализации
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_INSTALL_PLUGINS=grafana-clock-panel
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - lb_network
+    depends_on:
+      - influxdb
+
+  # Тестовый клиент k6
   loadtest-user1:
     image: grafana/k6:latest
     container_name: k6-user1
     volumes:
-      - ./k6:/scripts
-    command: run /scripts/user.js
+      - ./k6:/scripts:ro
+    entrypoint: ["k6", "run"]
+    # Вставьте сюда новый токен
+    command: ["--out", "influxdb=http://admin_k6:admin123@influxdb:8086/k6db", "/scripts/user.js"]
     networks:
       - lb_network
     deploy:
@@ -47,7 +86,7 @@ services:
       - backend
 
 volumes:
-  db_data:
+  influxdb_data:
   grafana_data:
 
 networks:
