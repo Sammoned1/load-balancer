@@ -194,8 +194,6 @@ export class ContainerLoadBalancer {
 
   private async getContainerMetrics(): Promise<ContainerMetrics> {
     const memoryUsage = process.memoryUsage().heapUsed / this.containerMemoryLimit;
-    
-    // Измеряем CPU usage для этого конкретного запроса
     const cpuUsage = await this.measureCurrentCpuUsage();
 
     return {
@@ -210,16 +208,13 @@ export class ContainerLoadBalancer {
       const startTime = Date.now();
       const startUsage = process.cpuUsage();
       
-      // Ждем 100ms для измерения CPU usage
       setTimeout(() => {
         const endTime = Date.now();
         const endUsage = process.cpuUsage();
         
-        const timeDiff = endTime - startTime; // в миллисекундах
-        const usageDiff = (endUsage.user - startUsage.user) + (endUsage.system - startUsage.system); // в микросекундах
+        const timeDiff = endTime - startTime;
+        const usageDiff = (endUsage.user - startUsage.user) + (endUsage.system - startUsage.system);
         
-        // Максимально возможное использование за timeDiff для контейнера:
-        // timeDiff (ms) * 1000 (microseconds/ms) * containerCpuLimit (cores)
         const maxUsage = timeDiff * 1000 * this.containerCpuLimit;
         
         let cpuUsage = 0;
@@ -227,9 +222,8 @@ export class ContainerLoadBalancer {
           cpuUsage = usageDiff / maxUsage;
         }
         
-        // Ограничиваем 100%
         resolve(Math.min(cpuUsage, 1));
-      }, 100); // Измеряем за 100ms
+      }, 100);
     });
   }
 

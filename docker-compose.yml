@@ -66,14 +66,44 @@ services:
     depends_on:
       - influxdb
 
-  # Тестовый клиент k6
   loadtest-user1:
     image: grafana/k6:latest
     container_name: k6-user1
     volumes:
       - ./k6:/scripts:ro
     entrypoint: ["k6", "run"]
-    # Вставьте сюда новый токен
+    command: ["--out", "influxdb=http://admin_k6:admin123@influxdb:8086/k6db", "/scripts/user.js"]
+    networks:
+      - lb_network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    depends_on:
+      - backend
+  loadtest-user2:
+    image: grafana/k6:latest
+    container_name: k6-user2
+    volumes:
+      - ./k6:/scripts:ro
+    entrypoint: ["k6", "run"]
+    command: ["--out", "influxdb=http://admin_k6:admin123@influxdb:8086/k6db", "/scripts/user.js"]
+    networks:
+      - lb_network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    depends_on:
+      - backend
+  loadtest-user3:
+    image: grafana/k6:latest
+    container_name: k6-user3
+    volumes:
+      - ./k6:/scripts:ro
+    entrypoint: ["k6", "run"]
     command: ["--out", "influxdb=http://admin_k6:admin123@influxdb:8086/k6db", "/scripts/user.js"]
     networks:
       - lb_network

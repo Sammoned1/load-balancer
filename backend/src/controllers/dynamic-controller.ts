@@ -86,7 +86,7 @@ export class DynamicController {
           success: true,
           algorithm: 'fibonacci',
           executedOn: 'server',
-          executionTime: `${executionTimeMs} ms`,
+          executionTime: executionTimeMs,
           // result: result,
           // input: FIBONACCI_INPUT,
           // loadInfo: await this.getLoadInfo()
@@ -138,7 +138,7 @@ export class DynamicController {
           success: true,
           algorithm: 'permutations',
           executedOn: 'server',
-          executionTime: `${executionTimeMs} ms`,
+          executionTime: executionTimeMs,
           resultCount: result.length,
           // sample: result.slice(0, 3),
           // loadInfo: await this.getLoadInfo()
