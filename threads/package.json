@@ -1,0 +1,19 @@
+{
+  "name": "load-test-experiment",
+  "version": "1.0.0",
+  "description": "Isolated load testing experiment with Node.js child processes",
+  "main": "orchestrator.js",
+  "scripts": {
+    "test:server": "set TEST_CASE=1&& set RPS=16&& set DURATION=60&& node orchestrator.js",
+    "test:client": "set TEST_CASE=2&& set RPS=16&& set DURATION=60&& node orchestrator.js",
+    "test:dynamic": "set TEST_CASE=3&& set RPS=16&& set DURATION=60&& node orchestrator.js",
+    "clean": "rmdir /s /q results 2>nul && echo Results cleaned",
+    "monitor": "node monitor.js"
+  },
+  "keywords": ["load-testing", "isolation", "experiment", "child-process"],
+  "author": "Your Name",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

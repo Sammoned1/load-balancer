@@ -19,6 +19,7 @@ export class ClientSideController {
         success: true,
         algorithm: 'bubble-sort',
         functionSource: functionSource,
+        executedOn: 'client',
         inputData: inputData,
         instructions: `Execute this function on client with input data`
       });
@@ -44,6 +45,7 @@ export class ClientSideController {
         success: true,
         algorithm: 'fibonacci',
         functionSource: functionSource,
+        executedOn: 'client',
         inputData: inputData,
         instructions: `Execute this function on client with input data`
       });
@@ -69,6 +71,7 @@ export class ClientSideController {
         success: true,
         algorithm: 'permutations',
         functionSource: functionSource,
+        executedOn: 'client',
         inputData: inputData,
         instructions: `Execute this function on client with input data`
       });

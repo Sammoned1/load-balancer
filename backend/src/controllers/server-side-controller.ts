@@ -33,7 +33,7 @@ export class ServerSideController {
         // input: inputArray,
         // result: result,
         inputLength: inputArray.length,
-        executionTime: `${executionTimeMs} ms`,
+        executionTime: executionTimeMs,
         performance: 'measured'
       });
       
@@ -65,7 +65,7 @@ export class ServerSideController {
         algorithm: 'fibonacci',
         // input: n,
         // result: result,
-        executionTime: `${executionTimeMs} ms`,
+        executionTime: executionTimeMs,
         performance: 'measured'
       });
       
@@ -98,7 +98,7 @@ export class ServerSideController {
         // input: n,
         resultCount: result.length,
         // sample: result.slice(0, 5),
-        executionTime: `${executionTimeMs} ms`,
+        executionTime: executionTimeMs,
         performance: 'measured'
       });
       
