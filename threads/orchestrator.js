@@ -22,10 +22,21 @@ class SimpleOrchestrator {
         this.startTime = null;
         this.completedVUs = 0;
         this.logInterval = null;
+        this.prometheusPushgatewayUrl = process.env.PROMETHEUS_PUSHGATEWAY_URL || 'http://localhost:9091';
+        
+        // Инициализация метрик Prometheus
+        this.initPrometheusMetrics();
+    }
+
+    initPrometheusMetrics() {
+        // Эти счетчики будут использоваться для отправки метрик
+        this.sentRequestsCounter = 0;
+        this.redirectedOpsCounter = 0;
     }
 
     async start() {
         console.log(`🚀 Запуск нагрузочного теста`);
+        console.log(`   Pushgateway URL........: ${this.prometheusPushgatewayUrl}`);
         console.log(`   Целевой RPS.............: ${this.config.targetRPS}`);
         console.log(`   Длительность теста......: ${this.config.duration}с`);
         console.log(`   Количество процессов....: ${this.config.numProcesses}`);
@@ -60,7 +71,7 @@ class SimpleOrchestrator {
     
     async createProcess(id, rpsPerProcess) {
         return new Promise((resolve) => {
-            const child = fork('./virtual-user-simple.js', [], {
+            const child = fork('./virtual-user.js', [], {
                 stdio: ['pipe', 'pipe', 'pipe', 'ipc']
             });
             
@@ -70,13 +81,14 @@ class SimpleOrchestrator {
                         this.metrics.sentRequests++;
                         break;
                     case 'METRIC':
-                        // console.log('=== RESPONSE', msg.responseTime);
-                      
                         this.metrics.responseTimes.push(msg.responseTime);
                         this.metrics.completedRequests++;
                         if (msg.redirected) {
                             this.metrics.redirectedOps++;
                         }
+                        break;
+                    case 'LOG': 
+                        console.log(msg.message)
                         break;
                 }
             });
@@ -198,10 +210,10 @@ class SimpleOrchestrator {
 
 if (require.main === module) {
     const config = {
-        targetRPS: parseInt(process.env.RPS) || 10,
-        duration: parseInt(process.env.DURATION) || 15,
+        targetRPS: parseInt(process.env.RPS) || 16,
+        duration: parseInt(process.env.DURATION) || 60,
         serverUrl: process.env.SERVER_URL || 'http://localhost:8080',
-        testCase: parseInt(process.env.TEST_CASE) || 1
+        testCase: parseInt(process.env.TEST_CASE) || 3
     };
     
     const orchestrator = new SimpleOrchestrator(config);

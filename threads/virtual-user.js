@@ -1,4 +1,6 @@
 const http = require('http');
+const InfuxDbMetrics = require('./influxdb-metrics')
+const influxDB = new InfuxDbMetrics();
 
 let config = null;
 let sentRequests = 0;
@@ -55,7 +57,7 @@ function sendRequest() {
                     redirected = true;
 
                     await new Promise(resolve => {
-                      setTimeout(() => resolve(fn(response.inputData)), 5000)
+                      setTimeout(() => resolve(fn(response.inputData)), 10000)
                     })
 
                     totalTime += (Date.now() - clientStart);
@@ -71,6 +73,8 @@ function sendRequest() {
                         redirected: redirected
                     });
                 }
+
+				influxDB.sendMetric(totalTime, redirected, config.testCase);
                 
                 checkIfShouldExit();
                 

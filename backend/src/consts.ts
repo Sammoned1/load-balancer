@@ -5,7 +5,7 @@
  */
 
 // Данные для пузырьковой сортировки
-export const BUBBLE_SORT_INPUT = Array.from({ length: 8000 }, () => 
+export const BUBBLE_SORT_INPUT = Array.from({ length: 11000 }, () => 
   Math.floor(Math.random() * 100000)
 );
 
