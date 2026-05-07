@@ -1,0 +1,93 @@
+{
+  "id": null,
+  "uid": "loadtest-summary",
+  "title": "Load Test Summary (Table)",
+  "tags": ["threads", "load-testing"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Runs",
+      "gridPos": { "h": 18, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "influxdb", "uid": "influxdb" },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "run_id": true,
+              "timeout_count": true,
+              "load_phase_s": true,
+              "http_error_count": true,
+              "_time": true,
+              "wall_clock_ms": true,
+              "parse_error_count": true,
+              "test_case": true
+            },
+            "renameByName": {
+              "date": "date"
+            },
+            "indexByName": {
+              "date": 0,
+              "duration_s": 1,
+              "target_rps": 2,
+              "test_case_label": 3,
+              "sent_count": 4,
+              "completed_count": 5,
+              "ok_count": 6,
+              "error_count": 7,
+              "network_error_count": 8,
+              "tail_s": 9,
+              "wall_clock_s": 10,
+              "throughput_rps": 11,
+              "redirected_ok_count": 12,
+              "client_share": 13,
+              "median_ms": 14,
+              "p95_ms": 15,
+              "avg_ms": 16
+            }
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "query": "from(bucket: \"threads\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"loadtest_summary\")\n  // Гарантируем по одной записи на поле для каждого run_id\n  |> group(columns:[\"run_id\",\"test_case\",\"target_rps\",\"duration_s\",\"_field\"]) \n  |> last()\n  |> pivot(rowKey:[\"_time\",\"run_id\",\"test_case\",\"target_rps\",\"duration_s\"], columnKey:[\"_field\"], valueColumn:\"_value\")\n  // Снимаем group key, иначе Grafana трактует run_id/test_case как labels и схлопывает строки\n  |> group()\n  // Переименовываем время\n  |> rename(columns: {_time: \"date\"})\n  // Алиас test_case: 1=server, 2=client, 3=dynamic\n  |> map(fn: (r) => ({ r with test_case_label: if r.test_case == \"1\" then \"server\" else if r.test_case == \"2\" then \"client\" else if r.test_case == \"3\" then \"dynamic\" else r.test_case }))\n  |> keep(columns:[\"date\",\"run_id\",\"test_case\",\"test_case_label\",\"target_rps\",\"duration_s\",\"p95_ms\",\"avg_ms\",\"median_ms\",\"throughput_rps\",\"client_share\",\"redirected_ok_count\",\"sent_count\",\"completed_count\",\"ok_count\",\"error_count\",\"network_error_count\",\"wall_clock_s\",\"tail_s\"])\n  |> sort(columns:[\"date\"], desc:true)",
+          "resultFormat": "table"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "date",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          },
+          "unit": "none"
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "target_rps" }, "properties": [{ "id": "unit", "value": "reqps" }] },
+          { "matcher": { "id": "byName", "options": "client_share" }, "properties": [{ "id": "unit", "value": "percentunit" }, { "id": "decimals", "value": 2 }] },
+          { "matcher": { "id": "byName", "options": "throughput_rps" }, "properties": [{ "id": "unit", "value": "reqps" }] }
+        ]
+      }
+    }
+  ]
+}
+

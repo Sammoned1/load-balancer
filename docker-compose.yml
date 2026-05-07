@@ -60,6 +60,8 @@ services:
       - "3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
+      # Provisioning (datasources + dashboards)
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
     networks:
       - lb_network
     depends_on:
@@ -89,23 +91,23 @@ services:
   #     - pushgateway
 
   # Тестовый клиент k6
-  loadtest-user1:
-    image: grafana/k6:latest
-    container_name: k6-user1
-    volumes:
-      - ./k6:/scripts:ro
-    entrypoint: ["k6", "run"]
-    # Вставьте сюда новый токен
-    command: ["--out", "influxdb=http://admin_k6:admin123@influxdb:8086/k6db", "/scripts/user.js"]
-    networks:
-      - lb_network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-    depends_on:
-      - backend
+  # loadtest-user1:
+  #   image: grafana/k6:latest
+  #   container_name: k6-user1
+  #   volumes:
+  #     - ./k6:/scripts:ro
+  #   entrypoint: ["k6", "run"]
+  #   # Вставьте сюда новый токен
+  #   command: ["--out", "influxdb=http://admin_k6:admin123@influxdb:8086/k6db", "/scripts/user.js"]
+  #   networks:
+  #     - lb_network
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '0.5'
+  #         memory: 512M
+  #   depends_on:
+  #     - backend
 
 volumes:
   influxdb_data:

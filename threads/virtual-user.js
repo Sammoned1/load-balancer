@@ -45,9 +45,9 @@ function sendRequest() {
         let data = '';
         res.on('data', chunk => data += chunk);
         res.on('end', async () => {
+            const networkTime = Date.now() - requestStartTime;
             try {
                 const response = JSON.parse(data);
-                const networkTime = Date.now() - requestStartTime;
                 let totalTime = networkTime;
                 let redirected = false;
 
@@ -57,7 +57,7 @@ function sendRequest() {
                     redirected = true;
 
                     await new Promise(resolve => {
-                      setTimeout(() => resolve(fn(response.inputData)), 10000)
+                      setTimeout(() => resolve(fn(response.inputData)), 6000)
                     })
 
                     totalTime += (Date.now() - clientStart);
@@ -70,17 +70,30 @@ function sendRequest() {
                     process.send({
                         type: 'METRIC',
                         responseTime: totalTime,
-                        redirected: redirected
+                        redirected: redirected,
+                        outcome: (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) ? 'ok' : 'http_error',
+                        httpStatus: res.statusCode
                     });
                 }
 
-				influxDB.sendMetric(totalTime, redirected, config.testCase);
+				influxDB.sendMetric(totalTime, redirected, config.testCase, config.runId);
                 
                 checkIfShouldExit();
                 
             } catch (error) {
+                // JSON не распарсился или другой runtime error в обработке ответа.
                 completedRequests++;
                 pendingRequests.delete(requestId);
+
+                if (process.send) {
+                    process.send({
+                        type: 'METRIC',
+                        responseTime: networkTime,
+                        redirected: false,
+                        outcome: 'parse_error',
+                        httpStatus: res.statusCode
+                    });
+                }
                 checkIfShouldExit();
             }
         });
@@ -89,6 +102,17 @@ function sendRequest() {
     req.on('error', (error) => {
         completedRequests++;
         pendingRequests.delete(requestId);
+
+        if (process.send) {
+            process.send({
+                type: 'METRIC',
+                responseTime: Date.now() - requestStartTime,
+                redirected: false,
+                outcome: 'network_error',
+                errorCode: error && error.code ? String(error.code) : undefined,
+                errorMessage: error && error.message ? String(error.message) : undefined
+            });
+        }
         checkIfShouldExit();
     });
     
@@ -96,6 +120,16 @@ function sendRequest() {
         req.destroy();
         completedRequests++;
         pendingRequests.delete(requestId);
+
+        if (process.send) {
+            process.send({
+                type: 'METRIC',
+                responseTime: Date.now() - requestStartTime,
+                redirected: false,
+                outcome: 'timeout',
+                errorCode: 'REQUEST_TIMEOUT'
+            });
+        }
         checkIfShouldExit();
     });
 }
@@ -111,17 +145,38 @@ function checkIfShouldExit() {
 }
 
 function start() {
-    const interval = 1000 / config.rps;
-    
-    intervalId = setInterval(() => {
-        sendRequest();
-    }, interval);
-    
-    setTimeout(() => {
-        clearInterval(intervalId);
-        sendingStopped = true;
-        checkIfShouldExit();
-    }, config.duration * 1000);
+    if (!config || typeof config.rps !== 'number' || config.rps <= 0) {
+        // Нечего отправлять — завершаемся по таймеру, чтобы orchestrator не зависал.
+        setTimeout(() => process.exit(0), (config?.duration || 0) * 1000);
+        return;
+    }
+
+    // setInterval заметно дрейфует под нагрузкой и даёт смещения по количеству запросов.
+    // Делаем планировщик с коррекцией дрейфа: следующий тик всегда привязан к "идеальному" расписанию.
+    const intervalMs = 1000 / config.rps;
+    const startTime = Date.now();
+    const endTime = startTime + (config.duration * 1000);
+    let tick = 0;
+
+    const scheduleNext = () => {
+        const plannedAt = startTime + (tick * intervalMs);
+        const delay = Math.max(0, plannedAt - Date.now());
+
+        intervalId = setTimeout(() => {
+            const now = Date.now();
+            if (now >= endTime) {
+                sendingStopped = true;
+                checkIfShouldExit();
+                return;
+            }
+
+            tick++;
+            sendRequest();
+            scheduleNext();
+        }, delay);
+    };
+
+    scheduleNext();
 }
 
 process.on('uncaughtException', (err) => {
