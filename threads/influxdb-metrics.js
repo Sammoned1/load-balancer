@@ -6,6 +6,14 @@ class InfuxDbMetrics {
     this.bucket = opts.bucket || process.env.INFLUX_BUCKET || 'threads';
   }
 
+  log(message) {
+    if (process.send) {
+      process.send({ type: 'LOG', message });
+    } else {
+      process.stderr.write(`${message}\n`);
+    }
+  }
+
   async writeLine(line) {
     try {
       const res = await fetch(
@@ -22,20 +30,10 @@ class InfuxDbMetrics {
 
       if (!res.ok) {
         const text = await res.text().catch(() => '');
-        if (process.send) {
-          process.send({
-            type: 'LOG',
-            message: `[InfluxDB] Write failed: HTTP ${res.status} ${text}`.slice(0, 500),
-          });
-        }
+        this.log(`[InfluxDB] Write failed: HTTP ${res.status} ${text}`.slice(0, 500));
       }
     } catch (error) {
-      if (process.send) {
-        process.send({
-          type: 'LOG',
-          message: `[InfluxDB] Connection error: ${error?.message || String(error)}`.slice(0, 500),
-        });
-      }
+      this.log(`[InfluxDB] Connection error: ${error?.message || String(error)}`.slice(0, 500));
     }
   }
 
@@ -68,6 +66,7 @@ class InfuxDbMetrics {
     const testCase = summary.testCase;
     const targetRps = summary.targetRps;
     const durationS = summary.durationS;
+    const vusCount = Number.isFinite(summary.vusCount) ? summary.vusCount : 0;
 
     const p95 = Number.isFinite(summary.p95Ms) ? summary.p95Ms : 0;
     const avg = Number.isFinite(summary.avgMs) ? summary.avgMs : 0;
@@ -93,6 +92,7 @@ class InfuxDbMetrics {
       `loadtest_summary,run_id=${safeRunId},test_case=${testCase},target_rps=${targetRps},duration_s=${durationS}` +
       ` p95_ms=${p95},avg_ms=${avg},median_ms=${median},throughput_rps=${throughput},client_share=${clientShare}` +
       `,redirected_ok_count=${redirectedOkCount}` +
+      `,vus_count=${vusCount}` +
       `,sent_count=${sentCount},completed_count=${completedCount},ok_count=${okCount},error_count=${errorCount}` +
       `,timeout_count=${timeoutCount},network_error_count=${networkErrorCount},parse_error_count=${parseErrorCount},http_error_count=${httpErrorCount}` +
       `,wall_clock_s=${wallClockS},load_phase_s=${loadPhaseS},tail_s=${tailS}` +

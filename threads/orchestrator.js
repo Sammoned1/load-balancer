@@ -1,4 +1,4 @@
-const { fork } = require('child_process');
+const { fork, spawn } = require('child_process');
 const os = require('os');
 const InfuxDbMetrics = require('./influxdb-metrics');
 
@@ -9,7 +9,13 @@ class SimpleOrchestrator {
             duration: config.duration || 60,
             numProcesses: config.numProcesses || Math.floor(os.cpus().length),
             serverUrl: config.serverUrl || 'http://localhost:8080',
-            testCase: config.testCase || 1
+            testCase: config.testCase || 1,
+            vuRuntime: config.vuRuntime || 'process',
+            dockerImage: config.dockerImage || 'loadtest-vu:latest',
+            dockerNetwork: config.dockerNetwork || 'load-balancing-system_lb_network',
+            vuCpus: config.vuCpus || '0.15',
+            vuMemory: config.vuMemory || '64m',
+            vuStartDelayMs: config.vuStartDelayMs ?? ((config.vuRuntime || 'process') === 'docker' ? 5000 : 0)
         };
         
         // Один run_id на всё испытание
@@ -37,6 +43,10 @@ class SimpleOrchestrator {
         this.loadPhaseStartTime = null;
         this.loadPhaseEndTime = null;
         this.completedVUs = 0;
+        this.startedVUs = 0;
+        this.expectedVUs = 0;
+        this.allVusStartedResolve = null;
+        this.allVusStartedPromise = null;
         this.logInterval = null;
         this.prometheusPushgatewayUrl = process.env.PROMETHEUS_PUSHGATEWAY_URL || 'http://localhost:9091';
         
@@ -56,9 +66,16 @@ class SimpleOrchestrator {
         console.log(`   Pushgateway URL........: ${this.prometheusPushgatewayUrl}`);
         console.log(`   Целевой RPS.............: ${this.config.targetRPS}`);
         console.log(`   Длительность теста......: ${this.config.duration}с`);
-        console.log(`   Количество процессов....: ${this.config.numProcesses}`);
+        console.log(`   Runtime VU..............: ${this.config.vuRuntime}`);
+        console.log(`   Количество VU...........: ${this.config.numProcesses}`);
         console.log(`   Тест-кейс..............: ${this.config.testCase}`);
         console.log(`   Сервер.................: ${this.config.serverUrl}`);
+        if (this.config.vuRuntime === 'docker') {
+            console.log(`   Docker image............: ${this.config.dockerImage}`);
+            console.log(`   Docker network..........: ${this.config.dockerNetwork}`);
+            console.log(`   VU limits...............: cpus=${this.config.vuCpus}, memory=${this.config.vuMemory}`);
+            console.log(`   VU start delay..........: ${this.config.vuStartDelayMs}ms`);
+        }
         console.log('');
         
         // ВАЖНО: распределяем RPS так, чтобы СУММА по процессам = targetRPS.
@@ -80,13 +97,22 @@ class SimpleOrchestrator {
         
         this.startTime = Date.now();
         this.startLogging();
-        
+
+        this.expectedVUs = desiredProcesses;
+        this.startedVUs = 0;
+        this.allVusStartedPromise = new Promise((resolve) => {
+            this.allVusStartedResolve = resolve;
+        });
+        const startAt = Date.now() + this.config.vuStartDelayMs;
+
         for (let i = 0; i < desiredProcesses; i++) {
-            await this.createProcess(i, rpsPlan[i]);
+            await this.createProcess(i, rpsPlan[i], startAt);
         }
-        
-        // Фаза нагрузки начинается после того, как все процессы получили конфиг и начали отправку по интервалу.
-        this.loadPhaseStartTime = Date.now();
+
+        // Фаза нагрузки начинается после того, как все VU реально запустили свой scheduler.
+        // Для Docker это важно: container spawn != Node process inside container is ready.
+        await this.allVusStartedPromise;
+        this.loadPhaseStartTime = startAt;
         console.log(`✅ Все ${desiredProcesses} процессов запущены\n`);
         console.log(`⏱️  Тест длится ${this.config.duration} секунд...\n`);
         setTimeout(() => {
@@ -99,61 +125,26 @@ class SimpleOrchestrator {
         await this.printResults();
     }
     
-    async createProcess(id, rpsPerProcess) {
+    async createProcess(id, rpsPerProcess, startAt) {
+        if (this.config.vuRuntime === 'docker') {
+            return this.createDockerContainer(id, rpsPerProcess, startAt);
+        }
+
         return new Promise((resolve) => {
             const child = fork('./virtual-user.js', [], {
                 stdio: ['pipe', 'pipe', 'pipe', 'ipc']
             });
             
-            child.on('message', (msg) => {
-                switch(msg.type) {
-                    case 'SENT':
-                        this.metrics.sentRequests++;
-                        break;
-                    case 'METRIC':
-                        this.metrics.completedRequests++;
+            child.on('message', (msg) => this.handleVuMessage(msg));
 
-                        if (msg.redirected) this.metrics.redirectedOps++;
+            const processInfo = { id, child, runtime: 'process', exited: false };
 
-                        // outcome: ok | timeout | network_error | parse_error | http_error | unknown_error
-                        const outcome = msg.outcome || 'unknown_error';
-                        if (outcome === 'ok') {
-                            this.metrics.okRequests++;
-                            if (typeof msg.responseTime === 'number' && Number.isFinite(msg.responseTime)) {
-                                this.metrics.responseTimesOk.push(msg.responseTime);
-                            }
-                        } else {
-                            this.metrics.errorRequests++;
-                            if (outcome === 'timeout') this.metrics.timeoutRequests++;
-                            if (outcome === 'network_error') this.metrics.networkErrorRequests++;
-                            if (outcome === 'parse_error') this.metrics.parseErrorRequests++;
-                            if (outcome === 'http_error') this.metrics.httpErrorRequests++;
-                        }
-
-                        if (typeof msg.httpStatus === 'number') {
-                            const key = String(msg.httpStatus);
-                            this.metrics.httpStatusCounts[key] = (this.metrics.httpStatusCounts[key] || 0) + 1;
-                        }
-
-                        if (typeof msg.errorCode === 'string' && msg.errorCode.length > 0) {
-                            this.metrics.errorCodeCounts[msg.errorCode] = (this.metrics.errorCodeCounts[msg.errorCode] || 0) + 1;
-                        }
-                        if (typeof msg.errorMessage === 'string' && msg.errorMessage.length > 0) {
-                            const normalized = msg.errorMessage.slice(0, 120);
-                            this.metrics.errorMessageCounts[normalized] = (this.metrics.errorMessageCounts[normalized] || 0) + 1;
-                        }
-                        break;
-                    case 'LOG': 
-                        console.log(msg.message)
-                        break;
-                }
-            });
-            
             child.on('exit', () => {
+                processInfo.exited = true;
                 this.completedVUs++;
             });
-            
-            this.processes.push({ id, child });
+
+            this.processes.push(processInfo);
             
             child.send({
                 id: id,
@@ -161,11 +152,147 @@ class SimpleOrchestrator {
                 rps: rpsPerProcess,
                 duration: this.config.duration,
                 testCase: this.config.testCase,
-                runId: this.runId
+                runId: this.runId,
+                startAt
             });
             
             resolve();
         });
+    }
+
+    async createDockerContainer(id, rpsPerProcess, startAt) {
+        return new Promise((resolve, reject) => {
+            const containerName = `loadtest-vu-${this.runId}-${id}`.replace(/[^a-zA-Z0-9_.-]/g, '-');
+            const args = [
+                'run',
+                '--rm',
+                '--name', containerName,
+                '--network', this.config.dockerNetwork,
+                '--cpus', String(this.config.vuCpus),
+                '--memory', String(this.config.vuMemory),
+                '-e', `VU_ID=${id}`,
+                '-e', `RUN_ID=${this.runId}`,
+                '-e', `RPS=${rpsPerProcess}`,
+                '-e', `DURATION=${this.config.duration}`,
+                '-e', `TEST_CASE=${this.config.testCase}`,
+                '-e', `START_AT=${startAt}`,
+                '-e', `SERVER_URL=${this.config.serverUrl}`,
+                '-e', `INFLUX_URL=${process.env.INFLUX_URL || 'http://influxdb:8086'}`,
+                '-e', `INFLUX_TOKEN=${process.env.INFLUX_TOKEN || 'my-super-secret-auth-token'}`,
+                '-e', `INFLUX_ORG=${process.env.INFLUX_ORG || 'myorg'}`,
+                '-e', `INFLUX_BUCKET=${process.env.INFLUX_BUCKET || 'threads'}`,
+                this.config.dockerImage
+            ];
+
+            const child = spawn('docker', args, {
+                stdio: ['ignore', 'pipe', 'pipe']
+            });
+
+            child.stdout.setEncoding('utf8');
+            child.stderr.setEncoding('utf8');
+
+            let stdoutBuffer = '';
+            child.stdout.on('data', (chunk) => {
+                stdoutBuffer += chunk;
+                const lines = stdoutBuffer.split(/\r?\n/);
+                stdoutBuffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    this.handleDockerOutputLine(id, line);
+                }
+            });
+
+            child.stderr.on('data', (chunk) => {
+                for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
+                    console.log(`[VU ${id} stderr] ${line}`);
+                }
+            });
+
+            child.once('spawn', () => {
+                this.processes.push({ id, child, containerName, runtime: 'docker', exited: false });
+                resolve();
+            });
+
+            child.once('error', (error) => {
+                reject(error);
+            });
+
+            child.once('exit', (code) => {
+                if (stdoutBuffer.trim()) {
+                    this.handleDockerOutputLine(id, stdoutBuffer.trim());
+                    stdoutBuffer = '';
+                }
+
+                const processInfo = this.processes.find((proc) => proc.id === id);
+                if (processInfo) processInfo.exited = true;
+                this.completedVUs++;
+                if (code !== 0) {
+                    console.log(`[VU ${id}] Docker container exited with code ${code}`);
+                }
+            });
+        });
+    }
+
+    handleDockerOutputLine(id, line) {
+        if (!line.trim()) return;
+
+        try {
+            const msg = JSON.parse(line);
+            this.handleVuMessage(msg);
+        } catch (error) {
+            console.log(`[VU ${id}] ${line}`);
+        }
+    }
+
+    handleVuMessage(msg) {
+        switch(msg.type) {
+            case 'STARTED':
+                this.startedVUs++;
+                if (this.startedVUs >= this.expectedVUs && this.allVusStartedResolve) {
+                    this.allVusStartedResolve();
+                    this.allVusStartedResolve = null;
+                }
+                break;
+            case 'SENT':
+                this.metrics.sentRequests++;
+                break;
+            case 'METRIC':
+                this.metrics.completedRequests++;
+
+                if (msg.redirected) this.metrics.redirectedOps++;
+
+                // outcome: ok | timeout | network_error | parse_error | http_error | unknown_error
+                const outcome = msg.outcome || 'unknown_error';
+                if (outcome === 'ok') {
+                    this.metrics.okRequests++;
+                    if (typeof msg.responseTime === 'number' && Number.isFinite(msg.responseTime)) {
+                        this.metrics.responseTimesOk.push(msg.responseTime);
+                    }
+                } else {
+                    this.metrics.errorRequests++;
+                    if (outcome === 'timeout') this.metrics.timeoutRequests++;
+                    if (outcome === 'network_error') this.metrics.networkErrorRequests++;
+                    if (outcome === 'parse_error') this.metrics.parseErrorRequests++;
+                    if (outcome === 'http_error') this.metrics.httpErrorRequests++;
+                }
+
+                if (typeof msg.httpStatus === 'number') {
+                    const key = String(msg.httpStatus);
+                    this.metrics.httpStatusCounts[key] = (this.metrics.httpStatusCounts[key] || 0) + 1;
+                }
+
+                if (typeof msg.errorCode === 'string' && msg.errorCode.length > 0) {
+                    this.metrics.errorCodeCounts[msg.errorCode] = (this.metrics.errorCodeCounts[msg.errorCode] || 0) + 1;
+                }
+                if (typeof msg.errorMessage === 'string' && msg.errorMessage.length > 0) {
+                    const normalized = msg.errorMessage.slice(0, 120);
+                    this.metrics.errorMessageCounts[normalized] = (this.metrics.errorMessageCounts[normalized] || 0) + 1;
+                }
+                break;
+            case 'LOG':
+                console.log(msg.message);
+                break;
+        }
     }
     
     startLogging() {
@@ -184,17 +311,20 @@ class SimpleOrchestrator {
         // ВАЖНО: считаем по дробному времени, иначе на границах 5s/10s получаются "фантомные" запросы
         // из-за округления секунд вниз.
         const expectedSentByNow = Math.round(testTimeElapsedSeconds * this.config.targetRPS);
+        const pending = this.metrics.sentRequests - this.metrics.completedRequests;
         
         console.log(`[${elapsed.toString().padStart(3, '0')}s] ` +
                    `VUs: ${activeVUs}/${this.processes.length} ` +
                    `| ` +
-                   `Запросы: ${this.metrics.completedRequests}/${expectedSentByNow} ` +
+                   `Отправлено: ${this.metrics.sentRequests}/${expectedSentByNow} ` +
+                   `| ` +
+                   `Завершено: ${this.metrics.completedRequests} ` +
                    `| ` +
                    `RPS: ${this.config.targetRPS} ` +
                    `| ` +
                    `Перенаправлено: ${this.metrics.redirectedOps} ` +
                    `| ` +
-                   `Ожидает ответа: ${this.metrics.sentRequests - this.metrics.completedRequests}`);
+                   `Ожидает ответа: ${pending}`);
     }
     
 
@@ -204,6 +334,12 @@ class SimpleOrchestrator {
         // Создаем промисы для каждого процесса
         const exitPromises = this.processes.map(proc => {
             return new Promise((resolve) => {
+                if (proc.exited) {
+                    console.log(`[Process ${proc.id}] Завершился`);
+                    resolve();
+                    return;
+                }
+
                 proc.child.once('exit', () => {
                     console.log(`[Process ${proc.id}] Завершился`);
                     resolve();
@@ -324,6 +460,7 @@ class SimpleOrchestrator {
             testCase: this.config.testCase,
             targetRps: this.config.targetRPS,
             durationS: this.config.duration,
+            vusCount: this.expectedVUs || this.processes.length,
             p95Ms,
             avgMs,
             medianMs,
@@ -357,11 +494,21 @@ class SimpleOrchestrator {
 }
 
 if (require.main === module) {
+    const vuRuntime = process.env.VU_RUNTIME || 'process';
     const config = {
         targetRPS: parseInt(process.env.RPS) || 16,
         duration: parseInt(process.env.DURATION) || 60,
-        serverUrl: process.env.SERVER_URL || 'http://localhost:8080',
-        testCase: parseInt(process.env.TEST_CASE) || 3
+        numProcesses: parseInt(process.env.NUM_VUS || process.env.VUS) || Math.floor(os.cpus().length),
+        serverUrl: process.env.SERVER_URL || (vuRuntime === 'docker' ? 'http://backend:8080' : 'http://localhost:8080'),
+        testCase: parseInt(process.env.TEST_CASE) || 3,
+        vuRuntime,
+        dockerImage: process.env.VU_DOCKER_IMAGE || 'loadtest-vu:latest',
+        dockerNetwork: process.env.DOCKER_NETWORK || 'load-balancing-system_lb_network',
+        vuCpus: process.env.VU_CPUS || '0.25',
+        vuMemory: process.env.VU_MEMORY || '64m',
+        vuStartDelayMs: process.env.VU_START_DELAY_MS !== undefined
+            ? Number(process.env.VU_START_DELAY_MS)
+            : undefined
     };
     
     const orchestrator = new SimpleOrchestrator(config);

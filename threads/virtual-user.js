@@ -8,6 +8,14 @@ let completedRequests = 0;
 let pendingRequests = new Map();
 let intervalId = null;
 
+function emit(message) {
+    if (process.send) {
+        process.send(message);
+    } else {
+        process.stdout.write(`${JSON.stringify(message)}\n`);
+    }
+}
+
 process.on('message', (message) => {
     if (message.id !== undefined) {
         config = message;
@@ -24,12 +32,11 @@ function sendRequest() {
     const algorithm = generateInput();
     sentRequests++;
     
-    if (process.send) {
-        process.send({ type: 'SENT' });
-    }
+    emit({ type: 'SENT' });
     
     const requestId = sentRequests;
     const requestStartTime = Date.now();
+    const requestStartHr = process.hrtime.bigint();
     
     pendingRequests.set(requestId, { startTime: requestStartTime });
     
@@ -45,38 +52,43 @@ function sendRequest() {
         let data = '';
         res.on('data', chunk => data += chunk);
         res.on('end', async () => {
-            const networkTime = Date.now() - requestStartTime;
+            const endHrBeforeParse = process.hrtime.bigint();
+            const networkTimeMs = Number(endHrBeforeParse - requestStartHr) / 1e6;
             try {
                 const response = JSON.parse(data);
-                let totalTime = networkTime;
                 let redirected = false;
+                let outcome = (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) ? 'ok' : 'http_error';
+                let totalTimeMs = Number(process.hrtime.bigint() - requestStartHr) / 1e6;
 
                 if (response.executedOn === 'client') {
-                    const clientStart = Date.now();
-                    const fn = new Function('return ' + response.functionSource)();
                     redirected = true;
-
-                    await new Promise(resolve => {
-                      setTimeout(() => resolve(fn(response.inputData)), 6000)
-                    })
-
-                    totalTime += (Date.now() - clientStart);
+                    const clientStartHr = process.hrtime.bigint();
+                    try {
+                        const fn = new Function('return ' + response.functionSource)();
+                        fn(response.inputData);
+                    } catch (e) {
+                        outcome = 'client_exec_error';
+                    }
+                    const clientComputeMs = Number(process.hrtime.bigint() - clientStartHr) / 1e6;
+                    // total = network-to-end + client compute (client compute happens after response)
+                    totalTimeMs = Number(process.hrtime.bigint() - requestStartHr) / 1e6;
+                    // If function failed quickly, still include compute time in total.
+                    // (Already included in wall totalTimeMs, kept for clarity)
+                    void clientComputeMs;
                 }
                 
                 completedRequests++;
                 pendingRequests.delete(requestId);
                 
-                if (process.send) {
-                    process.send({
-                        type: 'METRIC',
-                        responseTime: totalTime,
-                        redirected: redirected,
-                        outcome: (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) ? 'ok' : 'http_error',
-                        httpStatus: res.statusCode
-                    });
-                }
+                emit({
+                    type: 'METRIC',
+                    responseTime: totalTimeMs,
+                    redirected: redirected,
+                    outcome,
+                    httpStatus: res.statusCode
+                });
 
-				influxDB.sendMetric(totalTime, redirected, config.testCase, config.runId);
+				influxDB.sendMetric(totalTimeMs, redirected, config.testCase, config.runId);
                 
                 checkIfShouldExit();
                 
@@ -85,15 +97,13 @@ function sendRequest() {
                 completedRequests++;
                 pendingRequests.delete(requestId);
 
-                if (process.send) {
-                    process.send({
-                        type: 'METRIC',
-                        responseTime: networkTime,
-                        redirected: false,
-                        outcome: 'parse_error',
-                        httpStatus: res.statusCode
-                    });
-                }
+                emit({
+                    type: 'METRIC',
+                    responseTime: networkTimeMs,
+                    redirected: false,
+                    outcome: 'parse_error',
+                    httpStatus: res.statusCode
+                });
                 checkIfShouldExit();
             }
         });
@@ -103,16 +113,14 @@ function sendRequest() {
         completedRequests++;
         pendingRequests.delete(requestId);
 
-        if (process.send) {
-            process.send({
-                type: 'METRIC',
-                responseTime: Date.now() - requestStartTime,
-                redirected: false,
-                outcome: 'network_error',
-                errorCode: error && error.code ? String(error.code) : undefined,
-                errorMessage: error && error.message ? String(error.message) : undefined
-            });
-        }
+        emit({
+            type: 'METRIC',
+            responseTime: Date.now() - requestStartTime,
+            redirected: false,
+            outcome: 'network_error',
+            errorCode: error && error.code ? String(error.code) : undefined,
+            errorMessage: error && error.message ? String(error.message) : undefined
+        });
         checkIfShouldExit();
     });
     
@@ -121,15 +129,13 @@ function sendRequest() {
         completedRequests++;
         pendingRequests.delete(requestId);
 
-        if (process.send) {
-            process.send({
-                type: 'METRIC',
-                responseTime: Date.now() - requestStartTime,
-                redirected: false,
-                outcome: 'timeout',
-                errorCode: 'REQUEST_TIMEOUT'
-            });
-        }
+        emit({
+            type: 'METRIC',
+            responseTime: Date.now() - requestStartTime,
+            redirected: false,
+            outcome: 'timeout',
+            errorCode: 'REQUEST_TIMEOUT'
+        });
         checkIfShouldExit();
     });
 }
@@ -151,12 +157,24 @@ function start() {
         return;
     }
 
+    const configuredStartAt = Number(config.startAt || 0);
+    if (configuredStartAt > Date.now()) {
+        setTimeout(start, configuredStartAt - Date.now());
+        return;
+    }
+
     // setInterval заметно дрейфует под нагрузкой и даёт смещения по количеству запросов.
     // Делаем планировщик с коррекцией дрейфа: следующий тик всегда привязан к "идеальному" расписанию.
     const intervalMs = 1000 / config.rps;
     const startTime = Date.now();
     const endTime = startTime + (config.duration * 1000);
     let tick = 0;
+
+    emit({
+        type: 'STARTED',
+        vuId: config.id,
+        startedAt: startTime
+    });
 
     const scheduleNext = () => {
         const plannedAt = startTime + (tick * intervalMs);
@@ -181,5 +199,27 @@ function start() {
 
 process.on('uncaughtException', (err) => {
     if (intervalId) clearInterval(intervalId);
+    emit({
+        type: 'METRIC',
+        responseTime: 0,
+        redirected: false,
+        outcome: 'runtime_error',
+        errorCode: err && err.code ? String(err.code) : 'UNCAUGHT_EXCEPTION',
+        errorMessage: err && err.message ? String(err.message) : String(err)
+    });
     process.exit(1);
 });
+
+if (!process.send) {
+    config = {
+        id: Number(process.env.VU_ID || 0),
+        serverUrl: process.env.SERVER_URL || 'http://backend:8080',
+        rps: Number(process.env.RPS || 1),
+        duration: Number(process.env.DURATION || 60),
+        testCase: Number(process.env.TEST_CASE || 3),
+        runId: process.env.RUN_ID || `manual_${Date.now()}`,
+        startAt: Number(process.env.START_AT || 0)
+    };
+
+    start();
+}

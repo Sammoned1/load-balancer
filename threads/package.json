@@ -4,9 +4,12 @@
   "description": "Isolated load testing experiment with Node.js child processes",
   "main": "orchestrator.js",
   "scripts": {
-    "test:server": "TEST_CASE=1 RPS=20 DURATION=60 node orchestrator.js",
-    "test:client": "TEST_CASE=2 RPS=20 DURATION=60 node orchestrator.js",
-    "test:dynamic": "TEST_CASE=3 RPS=20 DURATION=60 node orchestrator.js",
+    "docker:build": "docker build -t loadtest-vu:latest .",
+    "test:server": "VU_RUNTIME=docker TEST_CASE=1 RPS=20 DURATION=60 NUM_VUS=10 node orchestrator.js",
+    "test:client": "VU_RUNTIME=docker TEST_CASE=2 RPS=20 DURATION=60 NUM_VUS=10 node orchestrator.js",
+    "test:dynamic": "VU_RUNTIME=docker TEST_CASE=3 RPS=20 DURATION=60 NUM_VUS=10 node orchestrator.js",
+    "test:server:single": "VU_RUNTIME=docker TEST_CASE=1 RPS=2 DURATION=60 NUM_VUS=1 node orchestrator.js",
+    "test:client:single": "VU_RUNTIME=docker TEST_CASE=2 RPS=2 DURATION=60 NUM_VUS=1 node orchestrator.js",
     "clean": "rmdir /s /q results 2>nul && echo Results cleaned",
     "monitor": "node monitor.js"
   },
