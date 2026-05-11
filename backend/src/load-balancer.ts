@@ -40,9 +40,9 @@ export class ContainerLoadBalancer {
 
   // Пороги
   private readonly thresholds = {
-    cpu: 0.25,
-    memory: 0.45,
-    activeRequests: 4
+    cpu: 0.75,
+    memory: 0.60,
+    activeRequests: 12
   };
 
   // Лимиты контейнера (0.1 CPU, 128MB)

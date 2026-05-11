@@ -22,7 +22,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.1'
+          cpus: '0.8'
           memory: 128M
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
@@ -39,8 +39,9 @@ services:
       - DOCKER_INFLUXDB_INIT_USERNAME=admin
       - DOCKER_INFLUXDB_INIT_PASSWORD=admin123
       - DOCKER_INFLUXDB_INIT_ORG=myorg
-      - DOCKER_INFLUXDB_INIT_BUCKET=mybucket
+      - DOCKER_INFLUXDB_INIT_BUCKET=threads
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-secret-auth-token
+      - DOCKER_INFLUXDB_INIT_RETENTION=1h
     ports:
       - "8086:8086"
     volumes:
@@ -55,35 +56,58 @@ services:
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin123
-      - GF_INSTALL_PLUGINS=grafana-clock-panel
     ports:
       - "3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning
+      # Provisioning (datasources + dashboards)
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
     networks:
       - lb_network
     depends_on:
       - influxdb
 
+  # pushgateway:
+  #   image: prom/pushgateway:latest
+  #   container_name: pushgateway
+  #   ports:
+  #     - "9091:9091"
+  #   networks:
+  #     - lb_network
+
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   container_name: prometheus
+  #   volumes:
+  #     - ./monitor:/etc/prometheus
+  #   ports:
+  #     - "9090:9090"
+  #   networks:
+  #     - lb_network
+  #   command:
+  #     - '--config.file=/etc/prometheus/prometheus.yml'
+  #     - '--storage.tsdb.retention.time=1h'
+  #   depends_on:
+  #     - pushgateway
+
   # Тестовый клиент k6
-  loadtest-user1:
-    image: grafana/k6:latest
-    container_name: k6-user1
-    volumes:
-      - ./k6:/scripts:ro
-    entrypoint: ["k6", "run"]
-    # Вставьте сюда новый токен
-    command: ["--out", "influxdb=http://admin_k6:admin123@influxdb:8086/k6db", "/scripts/user.js"]
-    networks:
-      - lb_network
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-    depends_on:
-      - backend
+  # loadtest-user1:
+  #   image: grafana/k6:latest
+  #   container_name: k6-user1
+  #   volumes:
+  #     - ./k6:/scripts:ro
+  #   entrypoint: ["k6", "run"]
+  #   # Вставьте сюда новый токен
+  #   command: ["--out", "influxdb=http://admin_k6:admin123@influxdb:8086/k6db", "/scripts/user.js"]
+  #   networks:
+  #     - lb_network
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: '0.5'
+  #         memory: 512M
+  #   depends_on:
+  #     - backend
 
 volumes:
   influxdb_data:

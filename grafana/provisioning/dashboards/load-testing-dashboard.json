@@ -1,94 +1,50 @@
 {
-  "dashboard": {
-    "title": "Load Testing Dashboard",
-    "description": "Monitoring server vs client execution times",
-    "tags": ["k6", "load-testing"],
-    "timezone": "browser",
-    "panels": [
+  "id": null,
+  "uid": "load-testing-dashboard",
+  "title": "Load Testing Dashboard",
+  "description": "Monitoring run-level metrics from loadtest_summary",
+  "tags": ["threads", "load-testing"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [
       {
         "id": 1,
-        "title": "Execution Time Comparison",
-        "type": "barchart",
+        "title": "Latest run latency (p95/avg/median)",
+        "type": "stat",
         "gridPos": {
           "h": 8,
           "w": 24,
           "x": 0,
           "y": 0
         },
+        "datasource": { "type": "influxdb", "uid": "influxdb" },
         "targets": [
           {
-            "query": "from(bucket: \"mybucket\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"server_execution_time\")\n  |> filter(fn: (r) => r[\"_field\"] == \"value\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Server\")",
+            "query": "from(bucket: \"threads\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"loadtest_summary\")\n  |> filter(fn: (r) => r.test_case == \"1\")\n  |> filter(fn: (r) => r._field == \"p95_ms\" or r._field == \"avg_ms\" or r._field == \"median_ms\")\n  |> group(columns:[\"_field\"]) \n  |> last()",
             "refId": "A"
-          },
-          {
-            "query": "from(bucket: \"mybucket\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"client_execution_time\")\n  |> filter(fn: (r) => r[\"_field\"] == \"value\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Client\")",
-            "refId": "B"
           }
         ],
-        "options": {
-          "orientation": "vertical",
-          "xTickLabelRotation": 0,
-          "groupWidth": 0.7,
-          "barWidth": 0.97,
-          "showValue": "auto"
-        },
         "fieldConfig": {
           "defaults": {
             "unit": "ms",
             "color": {
               "mode": "palette-classic"
             },
-            "custom": {
-              "axisPlacement": "auto",
-              "axisLabel": "",
-              "axisColorMode": "text",
-              "scaleDistribution": {
-                "type": "linear"
-              },
-              "hideFrom": {
-                "tooltip": false,
-                "viz": false,
-                "legend": false
-              }
-            }
+            "mappings": [],
+            "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
           },
-          "overrides": [
-            {
-              "matcher": {
-                "id": "byName",
-                "options": "Server"
-              },
-              "properties": [
-                {
-                  "id": "color",
-                  "value": {
-                    "fixedColor": "green",
-                    "mode": "fixed"
-                  }
-                }
-              ]
-            },
-            {
-              "matcher": {
-                "id": "byName",
-                "options": "Client"
-              },
-              "properties": [
-                {
-                  "id": "color",
-                  "value": {
-                    "fixedColor": "blue",
-                    "mode": "fixed"
-                  }
-                }
-              ]
-            }
-          ]
+          "overrides": []
         }
       },
       {
         "id": 2,
-        "title": "Operations Distribution",
+        "title": "Latest run: throughput / errors / tail",
         "type": "stat",
         "gridPos": {
           "h": 4,
@@ -96,9 +52,10 @@
           "x": 0,
           "y": 8
         },
+        "datasource": { "type": "influxdb", "uid": "influxdb" },
         "targets": [
           {
-            "query": "from(bucket: \"mybucket\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"server_operations_total\")\n  |> filter(fn: (r) => r[\"_field\"] == \"value\")\n  |> last()\n  |> yield(name: \"Server Operations\")",
+            "query": "from(bucket: \"threads\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"loadtest_summary\")\n  |> filter(fn: (r) => r.test_case == \"1\")\n  |> filter(fn: (r) => r._field == \"throughput_rps\" or r._field == \"error_count\" or r._field == \"tail_s\")\n  |> group(columns:[\"_field\"]) \n  |> last()",
             "refId": "A"
           }
         ],
@@ -136,7 +93,7 @@
       },
       {
         "id": 3,
-        "title": "Client Operations",
+        "title": "Latest run: client share (hybrid only)",
         "type": "stat",
         "gridPos": {
           "h": 4,
@@ -144,9 +101,10 @@
           "x": 12,
           "y": 8
         },
+        "datasource": { "type": "influxdb", "uid": "influxdb" },
         "targets": [
           {
-            "query": "from(bucket: \"mybucket\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"client_operations_total\")\n  |> filter(fn: (r) => r[\"_field\"] == \"value\")\n  |> last()\n  |> yield(name: \"Client Operations\")",
+            "query": "from(bucket: \"threads\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"loadtest_summary\")\n  |> filter(fn: (r) => r.test_case == \"3\")\n  |> filter(fn: (r) => r._field == \"client_share\" or r._field == \"redirected_ok_count\")\n  |> group(columns:[\"_field\"]) \n  |> last()",
             "refId": "A"
           }
         ],
@@ -172,7 +130,7 @@
       },
       {
         "id": 4,
-        "title": "Execution Time Over Time",
+        "title": "Run history (p95_ms by test_case)",
         "type": "timeseries",
         "gridPos": {
           "h": 8,
@@ -180,14 +138,11 @@
           "x": 0,
           "y": 12
         },
+        "datasource": { "type": "influxdb", "uid": "influxdb" },
         "targets": [
           {
-            "query": "from(bucket: \"mybucket\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"server_execution_time\")\n  |> filter(fn: (r) => r[\"_field\"] == \"value\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Server\")",
+            "query": "from(bucket: \"threads\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"loadtest_summary\")\n  |> filter(fn: (r) => r._field == \"p95_ms\")\n  |> group(columns:[\"test_case\"]) \n  |> sort(columns:[\"_time\"])",
             "refId": "A"
-          },
-          {
-            "query": "from(bucket: \"mybucket\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"client_execution_time\")\n  |> filter(fn: (r) => r[\"_field\"] == \"value\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"Client\")",
-            "refId": "B"
           }
         ],
         "fieldConfig": {
@@ -197,47 +152,9 @@
               "mode": "palette-classic"
             }
           },
-          "overrides": [
-            {
-              "matcher": {
-                "id": "byName",
-                "options": "Server"
-              },
-              "properties": [
-                {
-                  "id": "color",
-                  "value": {
-                    "fixedColor": "green",
-                    "mode": "fixed"
-                  }
-                }
-              ]
-            },
-            {
-              "matcher": {
-                "id": "byName",
-                "options": "Client"
-              },
-              "properties": [
-                {
-                  "id": "color",
-                  "value": {
-                    "fixedColor": "blue",
-                    "mode": "fixed"
-                  }
-                }
-              ]
-            }
-          ]
+          "overrides": []
         }
       }
     ],
-    "time": {
-      "from": "now-5m",
-      "to": "now"
-    },
-    "timepicker": {},
-    "refresh": "5s"
-  },
-  "overwrite": true
+  "timepicker": {}
 }
